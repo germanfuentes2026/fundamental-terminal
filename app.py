@@ -63,7 +63,7 @@ section[data-testid="stSidebar"] * {
 }
 
 .block-container {
-    padding-top: 1.1rem;
+    padding-top: 4.5rem;
     max-width: 1480px;
 }
 
@@ -88,6 +88,7 @@ h1, h2, h3 {
     font-size: 13px;
     letter-spacing: 0.28em;
     text-transform: uppercase;
+    line-height: 1.4;
 }
 .ft-title {
     font-size: 28px;
