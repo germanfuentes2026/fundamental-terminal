@@ -424,10 +424,6 @@ with st.sidebar:
     ticker = st.text_input("Ticker", value="AAPL", placeholder="e.g. AAPL, MSFT, JPM").strip().upper()
     run = st.button("Load SEC XBRL", width="stretch")
     st.markdown("---")
-    st.markdown("**MARKET (X4)**")
-    px_override = st.number_input("Price override (optional)", min_value=0.0, value=0.0, step=0.01)
-    mcap_override = st.number_input("Market cap override (optional)", min_value=0.0, value=0.0, step=1_000_000.0, format="%.0f")
-    st.markdown("---")
     st.markdown("**ABOUT THE MODELS**")
     st.caption(
         "Piotroski (2000): nine binary fundamental signals on profitability, "
@@ -462,10 +458,6 @@ try:
         facts = cached_facts(meta.cik)
         bundle = extract_statement_bundle(facts)
         mkt = cached_mkt(active)
-        if px_override and px_override > 0:
-            mkt = {**mkt, "price": float(px_override), "source": "manual-price"}
-        if mcap_override and mcap_override > 0:
-            mkt = {**mkt, "market_cap": float(mcap_override), "source": "manual-mcap"}
 except SecLoaderError as exc:
     st.error(str(exc))
     st.stop()
@@ -482,13 +474,7 @@ hist = cached_close_on(active, stmt_end) if stmt_end else {"price": None, "date"
 
 x4_cap = None
 x4_price = None
-if mcap_override and mcap_override > 0:
-    x4_cap = float(mcap_override)
-    x4_note = "X4 market cap: manual override."
-elif px_override and px_override > 0:
-    x4_price = float(px_override)
-    x4_note = "X4 price: manual override."
-elif hist.get("price"):
+if hist.get("price"):
     x4_price = float(hist["price"])
     x4_note = (
         f"X4 price: close {x4_price:,.2f} on {hist['date']} "
@@ -692,6 +678,7 @@ This desk maps EBIT to US-GAAP `OperatingIncomeLoss` when a dedicated EBIT tag i
 $X_4$ uses Yahoo Finance market cap when available, else price × XBRL shares.
         """
     )
+
 
 
 
