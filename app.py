@@ -251,7 +251,6 @@ with st.sidebar:
     st.markdown("**COMMAND**")
     ticker = st.text_input("Ticker", value="AAPL", placeholder="e.g. AAPL, MSFT, JPM").strip().upper()
     run = st.button("Load SEC XBRL", width="stretch")
-    st.caption("SEC requires a descriptive User-Agent. Override with env `SEC_USER_AGENT`.")
     st.markdown("---")
     st.markdown("**MARKET (X4)**")
     px_override = st.number_input("Price override (optional)", min_value=0.0, value=0.0, step=0.01)
@@ -319,13 +318,6 @@ c3.metric("Z-SCORE", "—" if z_res.z is None else f"{z_res.z:.2f}", z_res.zone)
 c4.metric("PRICE", _fmt_num(mkt.get("price") if mkt else None, "ratio"))
 c5.metric("MKT CAP", _fmt_num(mkt.get("market_cap") if mkt else None))
 c6.metric("FY", str(f_res.year or z_res.year or "—"))
-
-st.caption(
-    f"{meta.entity_type or ''} · "
-    f"{', '.join(meta.exchanges) or 'n/a exchange'} · "
-    f"{mkt.get('source') or ''} · "
-    f"fiscal window F-Score {f_res.prior_year}→{f_res.year}"
-)
 
 tab_ov, tab_f, tab_z, tab_form = st.tabs(
     ["OVERVIEW", "PIOTROSKI", "ALTMAN", "FORMULAS"]
@@ -449,4 +441,5 @@ This desk maps EBIT to US-GAAP `OperatingIncomeLoss` when a dedicated EBIT tag i
 $X_4$ uses Yahoo Finance market cap when available, else price × XBRL shares.
         """
     )
+
 
