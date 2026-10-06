@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import json
 import math
 import re
 import sys
+import urllib.request
 from dataclasses import replace
 from pathlib import Path
 
@@ -240,20 +243,65 @@ def cached_subs(cik: str) -> dict:
     return load_submissions(cik)
 
 
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 12)
+def cached_close_on(ticker: str, date_str: str) -> dict:
+    """Last daily close on or before date_str (Yahoo chart API, split-adjusted)."""
+    try:
+        d = dt.date.fromisoformat(str(date_str)[:10])
+        utc = dt.timezone.utc
+        p1 = int(dt.datetime.combine(d - dt.timedelta(days=10), dt.time.min, tzinfo=utc).timestamp())
+        p2 = int(dt.datetime.combine(d + dt.timedelta(days=2), dt.time.min, tzinfo=utc).timestamp())
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+            f"?period1={p1}&period2={p2}&interval=1d&events=history"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.load(resp)
+        return _parse_close_on(data, d)
+    except Exception as exc:  # noqa: BLE001
+        return {"price": None, "date": None, "error": str(exc)}
+
+
+def _parse_close_on(data: dict, target: dt.date) -> dict:
+    result = data["chart"]["result"][0]
+    stamps = result.get("timestamp") or []
+    closes = result["indicators"]["quote"][0].get("close") or []
+    offset = (result.get("meta") or {}).get("gmtoffset", 0) or 0
+    best = None
+    for t, c in zip(stamps, closes):
+        if c is None:
+            continue
+        day = (dt.datetime.fromtimestamp(t, dt.timezone.utc) + dt.timedelta(seconds=offset)).date()
+        if day <= target and (best is None or day > best[0]):
+            best = (day, float(c))
+    if best is None:
+        return {"price": None, "date": None, "error": "no close on or before target date"}
+    return {"price": best[1], "date": best[0].isoformat(), "error": None}
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 15)
 def cached_mkt(ticker: str) -> dict:
     return fetch_market_snapshot(ticker)
+
+
+def _statement_point(bundle: dict, year):
+    """Latest-period data point of the fiscal year used for the scores."""
+    if year is None:
+        return None
+    best = None
+    for pts in bundle.values():
+        for p in pts:
+            if p.fy == year and p.end and (best is None or str(p.end) > str(best.end)):
+                best = p
+    return best
 
 
 def _statement_info(bundle: dict, year) -> str:
     """Describe the filing behind the scores: fiscal year, period end date and form."""
     if year is None:
         return ""
-    best = None
-    for pts in bundle.values():
-        for p in pts:
-            if p.fy == year and p.end and (best is None or str(p.end) > str(best.end)):
-                best = p
+    best = _statement_point(bundle, year)
     if best is None:
         return f"Financials: FY{year}"
     parts = [f"Financials: FY{year}", f"period end {best.end}"]
@@ -338,11 +386,36 @@ except Exception as exc:  # noqa: BLE001
     st.stop()
 
 f_res = compute_piotroski(bundle)
-z_res = compute_altman(
-    bundle,
-    market_cap=mkt.get("market_cap") if mkt else None,
-    market_price=mkt.get("price") if mkt else None,
-)
+
+# X4 uses the closing price on the statement date (last trading day on or before it).
+_pt = _statement_point(bundle, f_res.year)
+stmt_end = str(_pt.end)[:10] if _pt is not None else None
+hist = cached_close_on(active, stmt_end) if stmt_end else {"price": None, "date": None, "error": "no statement date"}
+
+x4_cap = None
+x4_price = None
+if mcap_override and mcap_override > 0:
+    x4_cap = float(mcap_override)
+    x4_note = "X4 market cap: manual override."
+elif px_override and px_override > 0:
+    x4_price = float(px_override)
+    x4_note = "X4 price: manual override."
+elif hist.get("price"):
+    x4_price = float(hist["price"])
+    x4_note = (
+        f"X4 price: close {x4_price:,.2f} on {hist['date']} "
+        f"(last trading day on or before statement date {stmt_end})."
+    )
+else:
+    x4_cap = mkt.get("market_cap") if mkt else None
+    x4_price = mkt.get("price") if mkt else None
+    x4_note = (
+        f"Could not get the close for {stmt_end or 'the statement date'}"
+        f"{' (' + str(hist.get('error')) + ')' if hist.get('error') else ''}; "
+        "X4 uses current market data instead."
+    )
+
+z_res = compute_altman(bundle, market_cap=x4_cap, market_price=x4_price)
 
 render_masthead(meta, mkt, _statement_info(bundle, f_res.year or z_res.year))
 
@@ -350,8 +423,10 @@ c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("TICKER", meta.ticker)
 c2.metric("F-SCORE", "—" if f_res.score is None else f"{f_res.score}/9", f_res.label)
 c3.metric("Z-SCORE", "—" if z_res.z is None else f"{z_res.z:.2f}", z_res.zone)
-c4.metric("PRICE", _fmt_num(mkt.get("price") if mkt else None, "ratio"))
-c5.metric("MKT CAP", _fmt_num(mkt.get("market_cap") if mkt else None))
+_px_shown = x4_price if x4_price else (mkt.get("price") if mkt else None)
+_cap_shown = z_res.market_cap if z_res.market_cap is not None else (mkt.get("market_cap") if mkt else None)
+c4.metric("PRICE @ FY END", _fmt_num(_px_shown, "ratio"))
+c5.metric("MKT CAP @ FY END", _fmt_num(_cap_shown))
 c6.metric("FY", str(f_res.year or z_res.year or "—"))
 
 tab_ov, tab_f, tab_z, tab_form = st.tabs(
@@ -413,7 +488,8 @@ with tab_ov:
     st.markdown(
         f"**Z-Score:** `{'n/a' if z_res.z is None else f'{z_res.z:.2f}'}`\n\n"
         f"**Zone:** `{z_res.zone}` — {z_res.zone_detail}  \n"
-        f"Market equity source: {z_res.market_cap_source or 'unavailable'}"
+        f"Market equity source: {z_res.market_cap_source or 'unavailable'}  \n"
+        f"{x4_note}"
     )
     if z_res.missing:
         st.warning("Missing Altman factors: " + ", ".join(z_res.missing))
@@ -496,5 +572,6 @@ This desk maps EBIT to US-GAAP `OperatingIncomeLoss` when a dedicated EBIT tag i
 $X_4$ uses Yahoo Finance market cap when available, else price × XBRL shares.
         """
     )
+
 
 
