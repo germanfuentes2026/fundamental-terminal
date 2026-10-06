@@ -343,6 +343,61 @@ def _statement_info(bundle: dict, year) -> str:
     return " · ".join(parts)
 
 
+def _trunc_bundle(bundle: dict, year: int) -> dict:
+    """Bundle restricted to fiscal years <= year, so the models treat `year` as the latest."""
+    return {k: [p for p in pts if p.fy is not None and p.fy <= year] for k, pts in bundle.items()}
+
+
+def build_history(bundle: dict, ticker: str, n: int = 5, latest_cap=None, latest_price=None):
+    """Piotroski and Altman for each of the last n fiscal years (newest first)."""
+    years = sorted({p.fy for pts in bundle.values() for p in pts if p.fy is not None})[-n:]
+    latest = years[-1] if years else None
+    f_rows, z_rows = [], []
+    for y in reversed(years):
+        tb = _trunc_bundle(bundle, y)
+        pt = _statement_point(tb, y)
+        end = str(pt.end)[:10] if pt is not None else None
+
+        # Piotroski
+        try:
+            fr = compute_piotroski(tb)
+        except Exception:  # noqa: BLE001
+            fr = None
+        row = {"FY": str(y), "period end": end, "F-Score": None, "quality": "n/a"}
+        if fr is not None and fr.year == y:
+            row["F-Score"] = fr.score
+            row["quality"] = fr.label
+            for cr in fr.criteria:
+                row[cr.code] = cr.points if cr.passed is not None else None
+        f_rows.append(row)
+
+        # Altman: close price on the statement date of that year
+        if y == latest and (latest_cap or latest_price):
+            cap, price = latest_cap, latest_price
+        else:
+            hp = cached_close_on(ticker, end) if end else {"price": None}
+            cap, price = None, hp.get("price")
+        zrow = {"FY": str(y), "period end": end, "close (USD)": price, "mkt cap": "—",
+                "Z-Score": None, "zone": "n/a"}
+        try:
+            zr = compute_altman(tb, market_cap=cap, market_price=price)
+        except Exception:  # noqa: BLE001
+            zr = None
+        if zr is not None and zr.year == y and zr.z is not None:
+            zrow["mkt cap"] = _fmt_usd(zr.market_cap, compact=True)
+            zrow["Z-Score"] = round(zr.z, 2)
+            zrow["zone"] = zr.zone
+            for cm in zr.components:
+                zrow[cm.code] = None if cm.value is None else round(cm.value, 4)
+        z_rows.append(zrow)
+    return f_rows, z_rows
+
+
+def _avg(vals):
+    v = [x for x in vals if x is not None]
+    return (sum(v) / len(v)) if v else None
+
+
 def render_masthead(meta: CompanyMeta | None, mkt: dict | None, stmt: str = "") -> None:
     ticker_html = ""
     stmt_html = f"<br/>{stmt}" if stmt else ""
@@ -462,6 +517,9 @@ c4.metric("PRICE @ FY END (USD)", _fmt_usd(_px_shown))
 c5.metric("MKT CAP @ FY END (USD)", _fmt_usd(_cap_shown, compact=True))
 c6.metric("FY", str(f_res.year or z_res.year or "—"))
 
+with st.spinner("Building 5-year history…"):
+    hist_f, hist_z = build_history(bundle, active, 5, latest_cap=x4_cap, latest_price=x4_price)
+
 tab_ov, tab_f, tab_z, tab_form = st.tabs(
     ["OVERVIEW", "PIOTROSKI", "ALTMAN", "FORMULAS"]
 )
@@ -496,6 +554,18 @@ with tab_ov:
     if f_res.missing:
         st.warning("Incomplete signals (counted as 0): " + ", ".join(f_res.missing))
 
+    st.markdown("**Historical Piotroski (last 5 fiscal years)**")
+    st.dataframe(pd.DataFrame(hist_f), width="stretch", hide_index=True)
+    _fs = [r["F-Score"] for r in hist_f]
+    _fv = [x for x in _fs if x is not None]
+    if _fv:
+        st.markdown(
+            f"**Average F-Score:** `{_avg(_fv):.2f}/9` over {len(_fv)} fiscal years  \n"
+            f"Min `{min(_fv)}` · Max `{max(_fv)}`"
+        )
+    else:
+        st.caption("Not enough data to build the Piotroski history.")
+
     st.subheader("Altman Z-Score")
     zrows = []
     for cm in z_res.components:
@@ -526,6 +596,23 @@ with tab_ov:
     )
     if z_res.missing:
         st.warning("Missing Altman factors: " + ", ".join(z_res.missing))
+
+    st.markdown("**Historical Altman (last 5 fiscal years)**")
+    st.caption("X4 uses the close on each statement date × shares outstanding.")
+    st.dataframe(
+        pd.DataFrame(hist_z),
+        width="stretch",
+        hide_index=True,
+        column_config={"close (USD)": st.column_config.NumberColumn("close (USD)", format="$%.2f")},
+    )
+    _zv = [r["Z-Score"] for r in hist_z if r["Z-Score"] is not None]
+    if _zv:
+        st.markdown(
+            f"**Average Z-Score:** `{_avg(_zv):.2f}` over {len(_zv)} fiscal years  \n"
+            f"Min `{min(_zv):.2f}` · Max `{max(_zv):.2f}`"
+        )
+    else:
+        st.caption("Not enough data to build the Altman history.")
 
 with tab_f:
     st.markdown(
@@ -605,6 +692,7 @@ This desk maps EBIT to US-GAAP `OperatingIncomeLoss` when a dedicated EBIT tag i
 $X_4$ uses Yahoo Finance market cap when available, else price × XBRL shares.
         """
     )
+
 
 
 
