@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -207,6 +208,22 @@ def _pass_label(passed: bool | None) -> str:
     return "N/A · —"
 
 
+_BIG_NUM = re.compile(r"-?\d{1,3}(?:,\d{3}){2,}(?:\.\d+)?")
+_PCT_NUM = re.compile(r"(-?\d+\.\d+)%")
+_DEC_NUM = re.compile(r"(?<![\d.,])(-?\d+\.\d{5,})(?![\d%])")
+
+
+def _pretty_detail(text) -> str:
+    """Shorten big numbers (111,482,000,000 -> 111.48B) and trim long decimals."""
+    if text is None:
+        return ""
+    t = str(text)
+    t = _BIG_NUM.sub(lambda m: _fmt_num(float(m.group(0).replace(",", ""))), t)
+    t = _PCT_NUM.sub(lambda m: f"{float(m.group(1)):.2f}%", t)
+    t = _DEC_NUM.sub(lambda m: f"{float(m.group(1)):.4f}", t)
+    return t
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def cached_resolve(ticker: str) -> CompanyMeta:
     return resolve_ticker(ticker)
@@ -323,42 +340,63 @@ tab_ov, tab_f, tab_z, tab_form = st.tabs(
 )
 
 with tab_ov:
-    left, right = st.columns((1.15, 1))
-    with left:
-        st.subheader("Piotroski F-Score")
-        rows = []
-        for cr in f_res.criteria:
-            rows.append(
-                {
-                    "signal": cr.code,
-                    "name": cr.name,
-                    "points": cr.points if cr.passed is not None else None,
-                    "detail": cr.narrative,
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-        if f_res.missing:
-            st.warning("Incomplete signals (counted as 0): " + ", ".join(f_res.missing))
-    with right:
-        st.subheader("Altman Z-Score")
-        zrows = []
-        for cm in z_res.components:
-            zrows.append(
-                {
-                    "factor": cm.code,
-                    "name": cm.name,
-                    "weight": cm.weight,
-                    "ratio": None if cm.value is None else round(cm.value, 4),
-                    "contribution": None if cm.contribution is None else round(cm.contribution, 4),
-                }
-            )
-        st.dataframe(pd.DataFrame(zrows), width="stretch", hide_index=True)
-        st.markdown(
-            f"**Zone:** `{z_res.zone}` — {z_res.zone_detail}  \n"
-            f"Market equity source: {z_res.market_cap_source or 'unavailable'}"
+    st.subheader("Piotroski F-Score")
+    rows = []
+    for cr in f_res.criteria:
+        rows.append(
+            {
+                "signal": cr.code,
+                "name": cr.name,
+                "points": cr.points if cr.passed is not None else None,
+                "detail": _pretty_detail(cr.narrative),
+            }
         )
-        if z_res.missing:
-            st.warning("Missing Altman factors: " + ", ".join(z_res.missing))
+    st.dataframe(
+        pd.DataFrame(rows),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "signal": st.column_config.TextColumn("signal", width="small"),
+            "name": st.column_config.TextColumn("name", width="medium"),
+            "points": st.column_config.NumberColumn("points", width="small", format="%d"),
+            "detail": st.column_config.TextColumn("detail", width="large"),
+        },
+    )
+    st.markdown(
+        f"**Score:** `{'n/a' if f_res.score is None else f'{f_res.score}/9'}` — {f_res.label}  \n"
+        f"Fiscal years: {f_res.prior_year} → {f_res.year}"
+    )
+    if f_res.missing:
+        st.warning("Incomplete signals (counted as 0): " + ", ".join(f_res.missing))
+
+    st.subheader("Altman Z-Score")
+    zrows = []
+    for cm in z_res.components:
+        zrows.append(
+            {
+                "factor": cm.code,
+                "name": cm.name,
+                "weight": cm.weight,
+                "ratio": None if cm.value is None else round(cm.value, 4),
+                "contribution": None if cm.contribution is None else round(cm.contribution, 4),
+            }
+        )
+    st.dataframe(
+        pd.DataFrame(zrows),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "weight": st.column_config.NumberColumn("weight", format="%.1f"),
+            "ratio": st.column_config.NumberColumn("ratio", format="%.4f"),
+            "contribution": st.column_config.NumberColumn("contribution", format="%.4f"),
+        },
+    )
+    st.markdown(
+        f"**Zone:** `{z_res.zone}` — {z_res.zone_detail}  \n"
+        f"Market equity source: {z_res.market_cap_source or 'unavailable'}"
+    )
+    if z_res.missing:
+        st.warning("Missing Altman factors: " + ", ".join(z_res.missing))
 
 with tab_f:
     st.markdown(
