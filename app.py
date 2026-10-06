@@ -245,8 +245,26 @@ def cached_mkt(ticker: str) -> dict:
     return fetch_market_snapshot(ticker)
 
 
-def render_masthead(meta: CompanyMeta | None, mkt: dict | None) -> None:
+def _statement_info(bundle: dict, year) -> str:
+    """Describe the filing behind the scores: fiscal year, period end date and form."""
+    if year is None:
+        return ""
+    best = None
+    for pts in bundle.values():
+        for p in pts:
+            if p.fy == year and p.end and (best is None or str(p.end) > str(best.end)):
+                best = p
+    if best is None:
+        return f"Financials: FY{year}"
+    parts = [f"Financials: FY{year}", f"period end {best.end}"]
+    if best.form:
+        parts.append(str(best.form))
+    return " · ".join(parts)
+
+
+def render_masthead(meta: CompanyMeta | None, mkt: dict | None, stmt: str = "") -> None:
     ticker_html = ""
+    stmt_html = f"<br/>{stmt}" if stmt else ""
     if meta:
         ticker_html = f'<div class="ft-ticker">{meta.ticker} &nbsp;<span style="color:#9aa89b;font-size:14px">{meta.name}</span></div>'
     st.markdown(
@@ -258,7 +276,7 @@ def render_masthead(meta: CompanyMeta | None, mkt: dict | None) -> None:
             <div class="ft-sub">Piotroski F-Score · Altman Z-Score</div>
             {ticker_html}
           </div>
-          <div class="ft-clock">Data: data.sec.gov &nbsp;|&nbsp; Market: Yahoo (optional)</div>
+          <div class="ft-clock">Data: data.sec.gov &nbsp;|&nbsp; Market: Yahoo (optional){stmt_html}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -319,14 +337,14 @@ except Exception as exc:  # noqa: BLE001
     st.error(f"Failed to load SEC data: {exc}")
     st.stop()
 
-render_masthead(meta, mkt)
-
 f_res = compute_piotroski(bundle)
 z_res = compute_altman(
     bundle,
     market_cap=mkt.get("market_cap") if mkt else None,
     market_price=mkt.get("price") if mkt else None,
 )
+
+render_masthead(meta, mkt, _statement_info(bundle, f_res.year or z_res.year))
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("TICKER", meta.ticker)
