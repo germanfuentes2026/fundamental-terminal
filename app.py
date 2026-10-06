@@ -25,7 +25,6 @@ from src.sec_loader import (
     enrich_meta,
     resolve_ticker,
     SecLoaderError,
-    series_by_year,
 )
 
 st.set_page_config(
@@ -228,42 +227,20 @@ def cached_mkt(ticker: str) -> dict:
     return fetch_market_snapshot(ticker)
 
 
-def bundle_table(bundle: dict) -> pd.DataFrame:
-    years: set[int] = set()
-    for pts in bundle.values():
-        years |= {p.fy for p in pts if p.fy is not None}
-    years_l = sorted(years)
-    rows = []
-    for key, pts in bundle.items():
-        by = series_by_year(pts)
-        row = {"line": key}
-        for y in years_l:
-            row[str(y)] = by[y].value if y in by else None
-        last = pts[-1] if pts else None
-        row["xbrl_concept"] = last.concept if last else None
-        row["form"] = last.form if last else None
-        row["period_end"] = last.end if last else None
-        row["accession"] = last.accn if last else None
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
 def render_masthead(meta: CompanyMeta | None, mkt: dict | None) -> None:
-    right = "SEC EDGAR · XBRL companyfacts"
     ticker_html = ""
     if meta:
         ticker_html = f'<div class="ft-ticker">{meta.ticker} &nbsp;<span style="color:#9aa89b;font-size:14px">{meta.name}</span></div>'
-        right = f"CIK {meta.cik} · SIC {meta.sic or '—'} {meta.sic_description or ''}"
     st.markdown(
         f"""
         <div class="ft-masthead">
           <div>
             <div class="ft-brand">Fundamental Terminal</div>
             <div class="ft-title">SEC Fundamental Analytics</div>
-            <div class="ft-sub">Piotroski F-Score · Altman Z-Score · XBRL audit trail</div>
+            <div class="ft-sub">Piotroski F-Score · Altman Z-Score</div>
             {ticker_html}
           </div>
-          <div class="ft-clock">{right}<br/>Data: data.sec.gov &nbsp;|&nbsp; Market: Yahoo (optional)</div>
+          <div class="ft-clock">Data: data.sec.gov &nbsp;|&nbsp; Market: Yahoo (optional)</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -292,7 +269,7 @@ with st.sidebar:
         "Cutoffs 1.81 / 2.99. Not a credit rating."
     )
     st.markdown("---")
-    st.caption("Educational desk. Filings can use heterogeneous US-GAAP concepts; always read the audit tab.")
+    st.caption("Educational desk. Filings can use heterogeneous US-GAAP concepts.")
 
 if "loaded_ticker" not in st.session_state:
     st.session_state.loaded_ticker = ticker or "AAPL"
@@ -344,14 +321,14 @@ c5.metric("MKT CAP", _fmt_num(mkt.get("market_cap") if mkt else None))
 c6.metric("FY", str(f_res.year or z_res.year or "—"))
 
 st.caption(
-    f"CIK `{meta.cik}` · {meta.entity_type or ''} · "
+    f"{meta.entity_type or ''} · "
     f"{', '.join(meta.exchanges) or 'n/a exchange'} · "
     f"{mkt.get('source') or ''} · "
     f"fiscal window F-Score {f_res.prior_year}→{f_res.year}"
 )
 
-tab_ov, tab_f, tab_z, tab_form, tab_audit, tab_xbrl = st.tabs(
-    ["OVERVIEW", "PIOTROSKI", "ALTMAN", "FORMULAS", "AUDIT", "XBRL LINES"]
+tab_ov, tab_f, tab_z, tab_form = st.tabs(
+    ["OVERVIEW", "PIOTROSKI", "ALTMAN", "FORMULAS"]
 )
 
 with tab_ov:
@@ -473,79 +450,3 @@ $X_4$ uses Yahoo Finance market cap when available, else price × XBRL shares.
         """
     )
 
-with tab_audit:
-    st.markdown(
-        '<p class="audit-note">Each value traces to a US-GAAP/IFRS concept, unit, period end, form and accession number from companyfacts.</p>',
-        unsafe_allow_html=True,
-    )
-    audit_rows = []
-    for key, pts in bundle.items():
-        for p in pts:
-            audit_rows.append(
-                {
-                    "line": key,
-                    "fy": p.fy,
-                    "value": p.value,
-                    "concept": p.concept,
-                    "taxonomy": p.source,
-                    "unit": p.unit,
-                    "period_end": p.end,
-                    "fp": p.fp,
-                    "form": p.form,
-                    "filed": p.filed,
-                    "accession": p.accn,
-                }
-            )
-    adf = pd.DataFrame(audit_rows).sort_values(["line", "fy"], ascending=[True, False])
-    st.dataframe(adf, width="stretch", hide_index=True, height=420)
-
-    st.subheader("Score construction notes")
-    st.json(
-        {
-            "piotroski": {
-                "year": f_res.year,
-                "prior_year": f_res.prior_year,
-                "score": f_res.score,
-                "missing_signals": f_res.missing,
-                "points": {c.code: c.points for c in f_res.criteria},
-            },
-            "altman": {
-                "year": z_res.year,
-                "z": z_res.z,
-                "zone": z_res.zone,
-                "missing_factors": z_res.missing,
-                "market_cap": z_res.market_cap,
-                "market_cap_source": z_res.market_cap_source,
-                "contributions": {c.code: c.contribution for c in z_res.components},
-            },
-            "sec": {
-                "cik": meta.cik,
-                "entityName_facts": facts.get("entityName"),
-                "user_agent_note": "Requests sent with SEC_USER_AGENT or default academic UA.",
-            },
-        }
-    )
-
-with tab_xbrl:
-    st.caption("Annual time series extracted from SEC companyfacts (preferred 10-K / 20-F, fy=FY).")
-    st.dataframe(bundle_table(bundle), width="stretch", hide_index=True)
-
-    filings = (subs.get("filings") or {}).get("recent") or {}
-    forms = filings.get("form") or []
-    accn = filings.get("accessionNumber") or []
-    filed = filings.get("filingDate") or []
-    report = filings.get("reportDate") or []
-    primary = filings.get("primaryDocument") or []
-    recents = []
-    for i, form in enumerate(forms[:25]):
-        recents.append(
-            {
-                "form": form,
-                "filed": filed[i] if i < len(filed) else None,
-                "report": report[i] if i < len(report) else None,
-                "accession": accn[i] if i < len(accn) else None,
-                "document": primary[i] if i < len(primary) else None,
-            }
-        )
-    st.subheader("Recent SEC submissions")
-    st.dataframe(pd.DataFrame(recents), width="stretch", hide_index=True)
