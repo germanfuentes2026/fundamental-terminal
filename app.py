@@ -120,7 +120,32 @@ h1, h2, h3 {
 div[data-testid="stMetric"] {
     background: #111714;
     border: 1px solid #243328;
-    padding: 10px 12px;
+    padding: 12px 8px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+div[data-testid="stMetric"] [data-testid="stMetricLabel"],
+div[data-testid="stMetric"] [data-testid="stMetricValue"],
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+}
+div[data-testid="stMetric"] [data-testid="stMetricLabel"] *,
+div[data-testid="stMetric"] [data-testid="stMetricValue"] *,
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] * {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    text-align: center;
+    justify-content: center;
+}
+div[data-testid="stMetric"] [data-testid="stMetricValue"] > div {
+    font-size: 1.7rem;
+    line-height: 1.2;
 }
 div[data-testid="stMetric"] label {
     color: #8b9a8d !important;
@@ -195,6 +220,8 @@ def _fmt_num(v, kind: str = "int") -> str:
         return f"{v:.4f}"
     if kind == "score":
         return f"{v:.2f}"
+    if abs(v) >= 1_000_000_000_000:
+        return f"{v/1_000_000_000_000:,.2f}T"
     if abs(v) >= 1_000_000_000:
         return f"{v/1_000_000_000:,.2f}B"
     if abs(v) >= 1_000_000:
@@ -202,6 +229,12 @@ def _fmt_num(v, kind: str = "int") -> str:
     if abs(v) >= 10_000:
         return f"{v:,.0f}"
     return f"{v:,.2f}"
+
+
+def _fmt_usd(v, compact: bool = False) -> str:
+    if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+        return "—"
+    return "$" + (_fmt_num(v) if compact else f"{v:,.2f}")
 
 
 def _pass_label(passed: bool | None) -> str:
@@ -425,8 +458,8 @@ c2.metric("F-SCORE", "—" if f_res.score is None else f"{f_res.score}/9", f_res
 c3.metric("Z-SCORE", "—" if z_res.z is None else f"{z_res.z:.2f}", z_res.zone)
 _px_shown = x4_price if x4_price else (mkt.get("price") if mkt else None)
 _cap_shown = z_res.market_cap if z_res.market_cap is not None else (mkt.get("market_cap") if mkt else None)
-c4.metric("PRICE @ FY END", _fmt_num(_px_shown, "ratio"))
-c5.metric("MKT CAP @ FY END", _fmt_num(_cap_shown))
+c4.metric("PRICE @ FY END (USD)", _fmt_usd(_px_shown))
+c5.metric("MKT CAP @ FY END (USD)", _fmt_usd(_cap_shown, compact=True))
 c6.metric("FY", str(f_res.year or z_res.year or "—"))
 
 tab_ov, tab_f, tab_z, tab_form = st.tabs(
