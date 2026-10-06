@@ -393,7 +393,7 @@ with tab_ov:
         },
     )
     st.markdown(
-        f"**Z-Score:** `{'n/a' if z_res.z is None else f'{z_res.z:.2f}'}`  \n"
+        f"**Z-Score:** `{'n/a' if z_res.z is None else f'{z_res.z:.2f}'}`\n\n"
         f"**Zone:** `{z_res.zone}` — {z_res.zone_detail}  \n"
         f"Market equity source: {z_res.market_cap_source or 'unavailable'}"
     )
