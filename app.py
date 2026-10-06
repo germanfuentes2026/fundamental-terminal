@@ -255,7 +255,6 @@ with st.sidebar:
     st.markdown("**MARKET (X4)**")
     px_override = st.number_input("Price override (optional)", min_value=0.0, value=0.0, step=0.01)
     mcap_override = st.number_input("Market cap override (optional)", min_value=0.0, value=0.0, step=1_000_000.0, format="%.0f")
-    st.caption("If Yahoo/Stooq is unavailable, enter last price. Market cap = price × XBRL shares unless override is set.")
     st.markdown("---")
     st.markdown("**ABOUT THE MODELS**")
     st.caption(
@@ -333,8 +332,6 @@ with tab_ov:
                 {
                     "signal": cr.code,
                     "name": cr.name,
-                    "group": cr.group,
-                    "result": _pass_label(cr.passed),
                     "points": cr.points if cr.passed is not None else None,
                     "detail": cr.narrative,
                 }
