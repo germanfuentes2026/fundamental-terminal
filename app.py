@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -398,6 +399,176 @@ def _avg(vals):
     return (sum(v) / len(v)) if v else None
 
 
+# ───────────────────────────── CHARTS ─────────────────────────────
+
+def _style_chart(ch: alt.Chart) -> alt.Chart:
+    """Dark terminal look for Altair charts."""
+    return (
+        ch.configure(background="#0b0e11")
+        .configure_view(stroke="#243328")
+        .configure_axis(
+            labelColor="#8b9a8d", titleColor="#8b9a8d",
+            gridColor="#1f2a22", domainColor="#243328", tickColor="#243328",
+            labelFont="IBM Plex Mono", titleFont="IBM Plex Mono",
+        )
+        .configure_legend(labelColor="#8b9a8d", titleColor="#8b9a8d")
+        .configure_title(color="#e8f3e9", font="IBM Plex Mono", fontSize=14)
+    )
+
+
+def _threshold_layer(levels: list[tuple[float, str, str]]) -> alt.Chart:
+    """Dashed horizontal reference lines: (value, label, color)."""
+    df = pd.DataFrame(levels, columns=["y", "label", "color"])
+    rules = alt.Chart(df).mark_rule(strokeDash=[5, 4], opacity=0.8).encode(
+        y="y:Q", color=alt.Color("color:N", scale=None)
+    )
+    texts = alt.Chart(df).mark_text(align="left", dx=4, dy=-6, fontSize=10).encode(
+        y="y:Q", text="label:N", color=alt.Color("color:N", scale=None),
+        x=alt.value(4),
+    )
+    return rules + texts
+
+
+def piotroski_chart(hist_f: list[dict]) -> alt.Chart | None:
+    df = pd.DataFrame(hist_f)
+    if df.empty or "F-Score" not in df:
+        return None
+    df = df.dropna(subset=["F-Score"]).sort_values("FY")
+    if df.empty:
+        return None
+    base = alt.Chart(df).encode(
+        x=alt.X("FY:N", title="Fiscal year", sort=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("F-Score:Q", title="F-Score", scale=alt.Scale(domain=[0, 9])),
+        tooltip=["FY", "period end", "F-Score", "quality"],
+    )
+    line = base.mark_line(color="#f5a623", strokeWidth=2.5,
+                          point=alt.OverlayMarkDef(color="#f5a623", size=90, filled=True))
+    labels = base.mark_text(dy=-14, color="#e8f3e9", fontSize=12,
+                            font="IBM Plex Mono").encode(text="F-Score:Q")
+    zones = _threshold_layer([
+        (8, "HIGH ≥ 8", "#3ddc84"),
+        (5, "AVERAGE ≥ 5", "#8b9a8d"),
+    ])
+    return _style_chart((zones + line + labels).properties(height=340, title="Piotroski F-Score"))
+
+
+def altman_chart(hist_z: list[dict]) -> alt.Chart | None:
+    df = pd.DataFrame(hist_z)
+    if df.empty or "Z-Score" not in df:
+        return None
+    df = df.dropna(subset=["Z-Score"]).sort_values("FY")
+    if df.empty:
+        return None
+    lo = min(0.0, float(df["Z-Score"].min()) - 0.5)
+    hi = max(3.5, float(df["Z-Score"].max()) + 0.5)
+    base = alt.Chart(df).encode(
+        x=alt.X("FY:N", title="Fiscal year", sort=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Z-Score:Q", title="Z-Score", scale=alt.Scale(domain=[lo, hi])),
+        tooltip=["FY", "period end", "Z-Score", "zone", "close (USD)"],
+    )
+    line = base.mark_line(color="#f5a623", strokeWidth=2.5,
+                          point=alt.OverlayMarkDef(color="#f5a623", size=90, filled=True))
+    labels = base.mark_text(dy=-14, color="#e8f3e9", fontSize=12,
+                            font="IBM Plex Mono").encode(text=alt.Text("Z-Score:Q", format=".2f"))
+    zones = _threshold_layer([
+        (2.99, "SAFE > 2.99", "#3ddc84"),
+        (1.81, "DISTRESS < 1.81", "#ff5c5c"),
+    ])
+    return _style_chart((zones + line + labels).properties(height=340, title="Altman Z-Score"))
+
+
+def piotroski_criteria_chart(hist_f: list[dict]) -> alt.Chart | None:
+    """Barras apiladas: cada señal aprobada suma 1 punto a la barra del año."""
+    df = pd.DataFrame(hist_f)
+    if df.empty:
+        return None
+    meta_cols = {"FY", "period end", "F-Score", "quality"}
+    codes = [c for c in df.columns if c not in meta_cols]
+    if not codes:
+        return None
+    long = (
+        df.melt(id_vars=["FY", "F-Score"], value_vars=codes,
+                var_name="signal", value_name="points")
+        .dropna(subset=["points"])
+    )
+    long = long[long["points"] > 0]
+    if long.empty:
+        return None
+    years = sorted(df["FY"].unique())
+
+    bars = alt.Chart(long).mark_bar(stroke="#0b0e11", strokeWidth=1).encode(
+        x=alt.X("FY:N", title="Fiscal year", sort=years, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("sum(points):Q", title="Señales aprobadas",
+                scale=alt.Scale(domain=[0, 9])),
+        color=alt.Color("signal:N", title="Señal", sort=codes,
+                        scale=alt.Scale(scheme="tableau10")),
+        order=alt.Order("signal:N", sort="ascending"),
+        tooltip=["FY", "signal", "points"],
+    )
+    totals = (
+        alt.Chart(df.dropna(subset=["F-Score"]))
+        .mark_text(dy=-8, color="#e8f3e9", fontSize=13, font="IBM Plex Mono")
+        .encode(
+            x=alt.X("FY:N", sort=years),
+            y=alt.Y("F-Score:Q", scale=alt.Scale(domain=[0, 9])),
+            text=alt.Text("F-Score:Q", format="d"),
+        )
+    )
+    return _style_chart((bars + totals).properties(height=360, title="Piotroski: criterios por año"))
+
+
+_ALTMAN_WEIGHTS = [1.2, 1.4, 3.3, 0.6, 1.0]
+
+
+def altman_contrib_chart(hist_z: list[dict]) -> alt.Chart | None:
+    """Barras apiladas con la contribución ponderada de X1–X5 y el Z total encima."""
+    df = pd.DataFrame(hist_z)
+    if df.empty or "Z-Score" not in df:
+        return None
+    meta_cols = {"FY", "period end", "close (USD)", "mkt cap", "Z-Score", "zone"}
+    factors = [c for c in df.columns if c not in meta_cols][: len(_ALTMAN_WEIGHTS)]
+    if not factors:
+        return None
+    df = df.dropna(subset=["Z-Score"]).copy()
+    if df.empty:
+        return None
+    for col, w in zip(factors, _ALTMAN_WEIGHTS):
+        df[col] = pd.to_numeric(df[col], errors="coerce") * w   # ratio -> contribución
+    long = df.melt(id_vars=["FY", "Z-Score"], value_vars=factors,
+                   var_name="factor", value_name="contribution").dropna(subset=["contribution"])
+    years = sorted(df["FY"].unique())
+
+    bars = alt.Chart(long).mark_bar(stroke="#0b0e11", strokeWidth=1).encode(
+        x=alt.X("FY:N", title="Fiscal year", sort=years, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("contribution:Q", title="Contribución al Z-Score"),
+        color=alt.Color("factor:N", title="Factor", sort=factors,
+                        scale=alt.Scale(scheme="tableau10")),
+        order=alt.Order("factor:N", sort="ascending"),
+        tooltip=["FY", "factor", alt.Tooltip("contribution:Q", format=".3f")],
+    )
+    total = (
+        alt.Chart(df)
+        .mark_point(shape="diamond", size=140, filled=True, color="#f5a623",
+                    stroke="#0b0e11")
+        .encode(x=alt.X("FY:N", sort=years), y="Z-Score:Q",
+                tooltip=["FY", alt.Tooltip("Z-Score:Q", format=".2f"), "zone"])
+    )
+    total_lbl = (
+        alt.Chart(df)
+        .mark_text(dx=22, color="#f5a623", fontSize=12, font="IBM Plex Mono")
+        .encode(x=alt.X("FY:N", sort=years), y="Z-Score:Q",
+                text=alt.Text("Z-Score:Q", format=".2f"))
+    )
+    zones = _threshold_layer([
+        (2.99, "SAFE > 2.99", "#3ddc84"),
+        (1.81, "DISTRESS < 1.81", "#ff5c5c"),
+    ])
+    return _style_chart((zones + bars + total + total_lbl).properties(
+        height=380, title="Altman: contribución de X1–X5 por año"))
+
+
+# ───────────────────────────── UI ─────────────────────────────
+
 def render_masthead(meta: CompanyMeta | None, mkt: dict | None, stmt: str = "") -> None:
     ticker_html = ""
     stmt_html = f"<br/>{stmt}" if stmt else ""
@@ -506,8 +677,8 @@ c6.metric("FY", str(f_res.year or z_res.year or "—"))
 with st.spinner("Building 5-year history…"):
     hist_f, hist_z = build_history(bundle, active, 5, latest_cap=x4_cap, latest_price=x4_price)
 
-tab_ov, tab_f, tab_z, tab_form = st.tabs(
-    ["OVERVIEW", "PIOTROSKI", "ALTMAN", "FORMULAS"]
+tab_ov, tab_f, tab_z, tab_form, tab_charts = st.tabs(
+    ["OVERVIEW", "PIOTROSKI", "ALTMAN", "FORMULAS", "CHARTS"]
 )
 
 with tab_ov:
@@ -678,6 +849,35 @@ This desk maps EBIT to US-GAAP `OperatingIncomeLoss` when a dedicated EBIT tag i
 $X_4$ uses Yahoo Finance market cap when available, else price × XBRL shares.
         """
     )
+
+with tab_charts:
+    st.subheader("Evolución de los indicadores")
+    st.caption("Últimos 5 años fiscales, del más antiguo al más reciente.")
+
+    pc = piotroski_chart(hist_f)
+    if pc is not None:
+        st.altair_chart(pc, width="stretch")
+    else:
+        st.info("No hay datos suficientes para graficar Piotroski.")
+
+    pcc = piotroski_criteria_chart(hist_f)
+    if pcc is not None:
+        st.altair_chart(pcc, width="stretch")
+        st.caption("Cada segmento es una señal aprobada (1 punto). La altura total es el F-Score.")
+
+    ac = altman_chart(hist_z)
+    if ac is not None:
+        st.altair_chart(ac, width="stretch")
+        st.caption("X4 usa el cierre en la fecha de cada balance × acciones en circulación.")
+    else:
+        st.info("No hay datos suficientes para graficar Altman.")
+
+    acc = altman_contrib_chart(hist_z)
+    if acc is not None:
+        st.altair_chart(acc, width="stretch")
+        st.caption("Barras: peso × ratio de cada factor (las negativas bajan el Z). "
+                   "El rombo ámbar es el Z-Score total.")
+
 
 
 
